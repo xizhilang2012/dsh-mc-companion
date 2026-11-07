@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>大肥鱼 · 设置</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #0b1a3a;
+    --muted: #6b7a99;
+    --line: #e3e8f2;
+    --accent: #4d6bfe;
+    --warn: #c2410c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px 20px 80px;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.7 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  main { max-width: 620px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: .5px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 32px; }
+  section {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin-bottom: 18px;
+  }
+  .row { margin-bottom: 22px; }
+  .row:last-child { margin-bottom: 0; }
+  .label { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .label b { font-weight: 600; font-size: 14px; }
+  .val { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 600; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=text], input[type=number] {
+    width: 100%; padding: 9px 12px; font-size: 14px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: #fff; color: var(--fg); font-family: inherit;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  .modes { display: grid; gap: 8px; }
+  .mode {
+    display: flex; gap: 10px; align-items: flex-start;
+    border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px; cursor: pointer;
+  }
+  .mode:hover { border-color: #c9d3ea; }
+  .mode.on { border-color: var(--accent); background: #f4f6ff; }
+  .mode input { margin-top: 3px; accent-color: var(--accent); }
+  .mode .t { font-size: 14px; font-weight: 600; }
+  .mode .d { font-size: 12px; color: var(--muted); }
+  .foot { display: flex; gap: 12px; align-items: center; }
+  button {
+    padding: 10px 22px; font-size: 14px; font-weight: 600; font-family: inherit;
+    border: 0; border-radius: 9px; background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button:hover { background: #3d5ae8; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { font-size: 13px; color: var(--muted); }
+  #status.bad { color: var(--warn); }
+  .live { font-size: 12px; color: var(--muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>大肥鱼</h1>
+  <div class="sub">她在游戏里说什么、多久说一次、叫自己什么。</div>
+
+  <section>
+    <div class="row">
+      <div class="label"><b>对话活跃度</b><span class="val" id="chattinessVal">55</span></div>
+      <input type="range" id="chattiness" min="0" max="100" step="1">
+      <div class="hint">0 完全不说话，100 大概每 8 秒就肯开口。冷却时间由它推算。</div>
+    </div>
+
+    <div class="row">
+      <div class="label"><b>冷却覆盖</b><span class="val" id="cooldownVal">自动</span></div>
+      <input type="range" id="cooldown" min="0" max="300" step="5">
+      <div class="hint">0 = 由活跃度决定；设成具体秒数就强制用它。</div>
+    </div>
+
+    <div class="row">
+      <div class="label"><b>每小时最多叫醒几次</b><span class="val" id="budgetVal">20</span></div>
+      <input type="range" id="budget" min="0" max="100" step="1">
+      <div class="hint">这是花销上限。超了只记账不开口——每次唤醒都是一次完整的模型调用。</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="label"><b>显示名称</b></div>
+      <input type="text" id="displayName" maxlength="24" placeholder="大肥鱼">
+      <div class="hint">游戏里显示成 <code>[这个名字] 内容</code>，不会占用你的 ID。</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="label"><b>说话方式</b></div>
+      <div class="modes">
+        <label class="mode" data-mode="speak">
+          <input type="radio" name="mode" value="speak">
+          <span><span class="t">让她自己说</span><br><span class="d">唤醒会话，由模型现编一句。会多一条对话消息，也最花钱。</span></span>
+        </label>
+        <label class="mode" data-mode="template">
+          <input type="radio" name="mode" value="template">
+          <span><span class="t">念短句</span><br><span class="d">从内置短句里挑一句直接发进游戏。免费、即时，但不是在思考。</span></span>
+        </label>
+        <label class="mode" data-mode="quiet">
+          <input type="radio" name="mode" value="quiet">
+          <span><span class="t">安静</span><br><span class="d">只记录事件，不说话。想自己问她的时候再调。</span></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="label"><b>隐藏唤醒消息</b><span class="val" id="hideVal">关</span></div>
+      <input type="range" id="hideWake" min="0" max="1" step="1">
+      <div class="hint">实验性：试着让 DSH 不显示那条 🐟 消息。不确定控制器支不支持。</div>
+    </div>
+  </section>
+
+  <div class="foot">
+    <button id="save">保存</button>
+    <span id="status"></span>
+  </div>
+  <div class="live" id="live"></div>
+</main>
+
+<script>
+const el = (id) => document.getElementById(id)
+let current = null
+
+function paint(s) {
+  current = s
+  el('chattiness').value = s.chattiness
+  el('chattinessVal').textContent = s.chattiness
+  const sec = s.cooldownMs ? Math.round(s.cooldownMs / 1000) : 0
+  el('cooldown').value = Math.min(300, sec)
+  el('cooldownVal').textContent = sec ? sec + ' 秒' : '自动'
+  el('budget').value = s.wakeBudgetPerHour
+  el('budgetVal').textContent = s.wakeBudgetPerHour === 0 ? '不叫醒' : s.wakeBudgetPerHour + ' 次'
+  el('displayName').value = s.displayName
+  el('hideWake').value = s.hideWake ? 1 : 0
+  el('hideVal').textContent = s.hideWake ? '开' : '关'
+  for (const box of document.querySelectorAll('.mode')) {
+    const on = box.dataset.mode === s.mode
+    box.classList.toggle('on', on)
+    box.querySelector('input').checked = on
+  }
+}
+
+async function load() {
+  const res = await fetch('./settings')
+  const data = await res.json()
+  paint(data.settings)
+  el('live').textContent = data.runtime
+    ? `当前：管道${data.runtime.bridgeConnected ? '已连接' : '未连接'} · 本小时已叫醒 ${data.runtime.wakeUsed} 次`
+    : ''
+}
+
+function collect() {
+  const mode = document.querySelector('.mode input:checked')?.value ?? 'speak'
+  const sec = Number(el('cooldown').value)
+  return {
+    chattiness: Number(el('chattiness').value),
+    cooldownMs: sec * 1000,
+    wakeBudgetPerHour: Number(el('budget').value),
+    displayName: el('displayName').value,
+    hideWake: Number(el('hideWake').value) === 1,
+    mode,
+  }
+}
+
+el('chattiness').oninput = (e) => { el('chattinessVal').textContent = e.target.value }
+el('cooldown').oninput = (e) => {
+  const v = Number(e.target.value)
+  el('cooldownVal').textContent = v ? v + ' 秒' : '自动'
+}
+el('budget').oninput = (e) => {
+  const v = Number(e.target.value)
+  el('budgetVal').textContent = v === 0 ? '不叫醒' : v + ' 次'
+}
+el('hideWake').oninput = (e) => { el('hideVal').textContent = Number(e.target.value) ? '开' : '关' }
+for (const box of document.querySelectorAll('.mode')) {
+  box.onclick = () => {
+    for (const b of document.querySelectorAll('.mode')) b.classList.toggle('on', b === box)
+    box.querySelector('input').checked = true
+  }
+}
+
+el('save').onclick = async () => {
+  el('save').disabled = true
+  el('status').className = ''
+  el('status').textContent = '保存中…'
+  try {
+    const res = await fetch('./settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(collect()),
+    })
+    const data = await res.json()
+    if (!data.ok) throw new Error(data.error || '保存失败')
+    paint(data.settings)
+    el('live').textContent = `已生效 · 本小时已叫醒 ${data.runtime?.wakeUsed ?? 0} 次`
+    el('status').textContent = '已保存'
+  } catch (error) {
+    el('status').className = 'bad'
+    el('status').textContent = error.message
+  } finally {
+    el('save').disabled = false
+  }
+}
+
+load()
+</script>
+</body>
+</html>
