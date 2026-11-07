@@ -1,0 +1,39 @@
+# ============================================================================
+# MC 陪伴 —— 让会话里的那个她看见你在游戏里干什么
+# ============================================================================
+# 装法：
+#   dsh plugin --profile desktop add "link:<这个目录>"
+#
+# Minecraft 服务端需要开 RCON（server.properties）：
+#   enable-rcon=true
+#   rcon.port=25575
+#   rcon.password=换成你自己的
+# 日志路径一般是 <服务端目录>\logs\latest.log
+# ============================================================================
+
+- insert:
+    - id: mc-companion
+      name: 'dsh-mc-companion'
+      config:
+        # 服务器地址
+        host: 127.0.0.1
+        rconPort: 25575
+        # 与 server.properties 里的 rcon.password 一致
+        rconPassword: ''
+        # 服务端日志的绝对路径；留空则只提供工具，不跟日志
+        logPath: ''
+        # 对话活跃度 0–100：0 完全不说话，100 尽量说
+        #   55 → 冷却约 40 秒；100 → 冷却 8 秒
+        chattiness: 55
+        # 待处理事件最多攒多少条
+        maxPending: 20
+        # true = 她在游戏里直接开口（内置短句，不经过模型、不打扰对话）
+        autoSay: false
+        # true = 把事件投给会话让她自己想（会在对话里多一条消息）
+        wake: true
+        # 她在游戏里显示的名字（不是你的 ID）
+        displayName: '大肥鱼'
+        # 她闲下来时自己提目标（会花钱，关掉就只在你叫她时才动）
+        autoGoal: true
+        # 两次提目标至少隔多少秒
+        goalIntervalSeconds: 180
