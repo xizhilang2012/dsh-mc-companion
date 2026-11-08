@@ -3,7 +3,7 @@
   "id": "mc-companion",
   "version": "0.1.1-beta.1",
   "name": "MC Companion",
-  "description": "给 DSH 的 AI 一个能自己走、自己挖、自己攒材料的身体（Minecraft 1.20.1 Fabric）。",
+  "description": "给 DSH 的 AI 一个伙伴的身体：能自己走、自己挖、自己攒材料（Minecraft 1.20.1 Fabric）。",
   "authors": ["xizhilang_2012"],
   "license": "MIT",
   "environment": "*",

@@ -1,7 +1,7 @@
 {
   "name": "dsh-mc-companion",
   "version": "0.1.1-beta.1",
-  "description": "让你的 AI 以「一个女人」的身份住进你的 Minecraft：自己的背包、自己的合成台、自己下矿攒材料做工具，累了自己回家。",
+  "description": "你的 AI 伙伴住进 Minecraft：她有自己的背包和合成台，自己砍树、下矿、攒材料做工具，走远了会自己回来。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -20,11 +20,18 @@
     "README.md",
     "AGENTS.md",
     "INSTALL.md",
-    "UPLOAD.md",
     "mod/build/libs/mc-companion-*.jar"
   ],
-  "keywords": ["dsh", "dsh-plugin", "minecraft", "companion", "fabric", "1.20.1", "ai-agent"],
-    "author": "xizhilang_2012",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "minecraft",
+    "companion",
+    "fabric",
+    "1.20.1",
+    "ai-agent"
+  ],
+  "author": "xizhilang_2012",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/xizhilang2012/dsh-mc-companion.git"
@@ -33,10 +40,17 @@
   "bugs": {
     "url": "https://github.com/xizhilang2012/dsh-mc-companion/issues"
   },
-  "scripts": { "test": "node --test tests/*.test.mjs" },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
-    "client": { "inject": [], "platform": "web" }
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
   },
   "license": "MIT"
 }
