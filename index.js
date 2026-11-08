@@ -14,6 +14,7 @@ import { readNewEvents } from './lib/log-tail.mjs'
 import { rconCommand, probeRcon } from './lib/rcon.mjs'
 import { shouldSpeak, markSpoke, cooldownFor } from './lib/chattiness.mjs'
 import { createBridge } from './lib/bridge.mjs'
+import { buildSetup } from './lib/setup.mjs'
 import { moodFor } from './lib/mood.mjs'
 import { pickLine } from './lib/lines.mjs'
 import { phrase } from './lib/phrase.mjs'
@@ -24,6 +25,26 @@ import { buildBundle, parseBundle, bundleToPersonaConfig, bundleToDiary } from '
 import { isOrder } from './lib/order.mjs'
 import { readSessionState, writeSessionState, newSessionId, bootstrapText } from './lib/session.mjs'
 import { shouldPropose, goalPrompt } from './lib/goal.mjs'
+import { preferencePrompt, normalizePreference } from './lib/preference.mjs'
+import { progressPrompt } from './lib/progress.mjs'
+import { autonomyRules } from './lib/autonomy.mjs'
+import { flattenPlan, describePlan, suggestTarget } from './lib/plan.mjs'
+import { runMake } from './lib/make.mjs'
+import { parseNeeds, buildQuestion, needsSatisfied } from './lib/request.mjs'
+
+// 跟随距离按性子给：建筑/采集要空间，黏人/守着要贴身，探险可以跑远点。
+function followDistanceFor(preference) {
+  switch (String(preference ?? '')) {
+    case 'company': return 4
+    case 'guard': return 4
+    case 'build': return 16
+    case 'gather': return 16
+    case 'explore': return 24
+    default: return 10
+  }
+}
+import { talkRules } from './lib/talk.mjs'
+import { personaPrompt } from './lib/identity.mjs'
 import { homedir } from 'node:os'
 import { readdir, stat } from 'node:fs/promises'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
@@ -70,7 +91,13 @@ const DEFAULTS = {
   bodyType: 'mc-companion:companion',
   bodyOn: false,
   autoGoal: false,
+  preference: 'company',
+  sheInvulnerable: true,
+  dropOnDeath: false,
+  revive: true,
+  // dedicated 需要新会话自带模型选择（provider/model），否则会落到要 API key 的路由
   sessionMode: 'dedicated',
+  sessionWorkspace: '',
   goalIntervalSeconds: 180,
   wake: false,
   autoSay: false,
@@ -96,6 +123,8 @@ export function apply(ctx, rawConfig) {
   }
   const log = ctx.logger ?? console
   const state = { lastSpokeAt: undefined, spokeTimes: [], pending: [], offset: 0, wakeTimes: [] }
+/** 插件自己的安装目录：找 mod 的 jar 用。 */
+const pluginRoot = fileURLToPath(new URL('.', import.meta.url))
 
   // 人设与记忆：先看显式配置，再按通用候选找（不绑死某一家插件）。
   // 别人的机器上可能是别的陪伴插件，也可能只是一份自己写的人设。
@@ -120,8 +149,11 @@ export function apply(ctx, rawConfig) {
    */
   const wake = async (event, verdict) => {
     const who = event.player ?? event.name ?? '老大'
-    const line = event.kind === 'goal' ? '她想找点事做'
+    const line = event.kind === 'craft'
+      ? `老大要我做「${event.label ?? event.item ?? '东西'}」（${event.item ?? ''}）`
+      : event.kind === 'goal' ? '她想找点事做'
       : event.kind === 'arrived' ? '她走到了地方'
+      : event.kind === 'stuck' ? '她走不过去，卡住了'
       : phrase(event)
     const mode = config.mode ?? (config.autoSay ? 'template' : config.wake ? 'speak' : 'quiet')
 
@@ -158,10 +190,20 @@ export function apply(ctx, rawConfig) {
       const saved = readSessionState()
       if (saved) {
         sessionId = saved.id
+        // 这条会话还没注入过人设（比如刚被改成指向已有会话）
+        if (!saved.bootstrappedAt) {
+          const who = await loadIdentity(config.identityPath)
+          prefix = `${bootstrapText({ name: config.displayName, ownerTitle: who.ownerTitle })}\n\n`
+          writeSessionState({ id: sessionId, bootstrappedAt: Date.now() })
+        }
       } else {
         sessionId = newSessionId()
         try {
-          await ctx.sessionController.create({ sessionId, cwd: process.cwd() })
+          // 不传 cwd：插件进程的 cwd 是 profile 目录，不是工作区。
+          // 建在那种地方的会话起不来（只有一条会话头，没有任何消息）。
+          const request = { sessionId }
+          if (config.sessionWorkspace) request.cwd = config.sessionWorkspace
+          await ctx.sessionController.create(request)
         } catch (error) {
           log.warn(`mc-companion: 建会话失败 ${error instanceof Error ? error.message : String(error)}`)
         }
@@ -183,17 +225,63 @@ export function apply(ctx, rawConfig) {
     const where = snap
       ? `\n（你在 ${snap.x}, ${snap.y}, ${snap.z}；她 ${snap.herPresent ? `在 ${snap.herX}, ${snap.herY}, ${snap.herZ}，离你 ${snap.herDistance} 格` : '不在场'}）`
       : ''
-    const prompt = event.kind === 'goal'
+    const craftItem = event.item ?? ''
+    const prompt = event.kind === 'craft'
+      ? `🐟 老大要你做「${event.label ?? craftItem}」。\n` +
+        `（先 action=craft item=${craftItem} 直接试做，它会当场告诉你成了没有。` +
+        `返回 result=craft-missing 时，detail 里就是缺什么、缺几个——**先自己解决**：` +
+        `缺木头/原木就 action=gather（她自己找树、走过去砍、掉落自己捡）；` +
+        `缺石头/圆石就 action=mine（没镐先做木镐并 equip 拿在手上，空手挖石头不掉东西）；` +
+        `中间产物自己做（木板→木棍→工具）。凑齐了再 craft 一次，做好她会自己送过来。` +
+        `真的搞不到才开口——用问句问，不要下命令。别拆玩家放的东西。）`
+      : event.kind === 'goal'
       ? goalPrompt(state.snapshot)
+        + '\n\n' + (() => {
+          const target = suggestTarget({ herBag: state.herBag, playerInv: state.inventory })
+          if (!target) return '工具都齐了：可以自由安排（跟着他 / 攒材料 / 搭东西 / 探路）。'
+          // 按需提请：升级不是"必须现在做"，而是"想做的时候可以这样发起"。
+          // 老大的原话：装备升级链在决策循环里按需提请，或者由他主动提出。
+          return [
+            `如果想升级装备（可选，不着急）：目标 ${target}`,
+            `  → action=make item=${target}，她会自己采/烧/做，缺材料会开口问。`,
+            '也可以先问他一句"要不要我把镐升级一下"，他说要再做。',
+          ].join('\n')
+        })()
+        + '\n\n' + preferencePrompt(config.preference, config.preferenceCustom)
+        + '\n\n' + progressPrompt({
+          herBag: state.herBag,
+          playerInv: state.inventory,
+          held: state.snapshot?.herHeld,
+        })
+        + '\n\n' + autonomyRules()
+      : event.kind === 'materials'
+      ? `🐟 你要的 ${event.detail} 到了（${event.item} 现在能做了）。${where}\n` +
+        `（继续：mc_companion action=make item=${event.item}——它会自己接着采集/加工/做成。` +
+        `做完 say 一句结果给他，别只说"收到"。）`
+      : event.kind === 'chat'
+      ? `🐟 老大在跟你说话：「${event.text ?? event.detail}」${where}\n` +
+        `（**先回一句**：用 mc_companion action=say，20 字内，接他的话，` +
+        `别回"收到""明白"这种空话；他要你做什么，回一句之后就去动手，做完再 say 一句结果。` +
+        `不想聊就一句带过，但不要不理他。）`
       : event.kind === 'arrived'
       ? `🐟 她走到了地方。${where}\n` +
         `（下一步做什么？派活用 mc_companion action=order kind=goto x= y= z=，` +
         `或 kind=follow / halt；想说一句就 action=say。）`
+      : event.kind === 'stuck'
+      ? `🐟 她走不过去，卡在半路了（就在那附近，不是没动）。${where}\n` +
+        `（换个办法：换目标点、用 kind=follow 让她跟过来、或者就地对准星挖东西；` +
+        `实在不行 say 一句告诉他绕不开。）`
       : `🐟 ${line}。${where}\n` +
-        `（想说就用 mc_companion action=say，一句 20 字内；不想说就别动。）`
+        `（缺东西先自己弄，真要问玩家就用问句。` +
+        `想说就用 mc_companion action=say。）`
+      + '\n\n' + talkRules(config.talkLevel)
     try {
       const controller = new AbortController()
-      const sent = await promptSession(ctx, sessionId, prefix + prompt, controller.signal, config.hideWake === true)
+      // 人设每次都带上（不是只注入一次）：她那条会话很长，只在开场说一遍，
+      // 聊到后面"她是谁"就被上下文冲淡了。
+      const persona = personaPrompt(await loadIdentity(config.identityPath))
+      const head = persona === '' ? '' : persona + '\n\n'
+      const sent = await promptSession(ctx, sessionId, prefix + head + prompt, controller.signal, config.hideWake === true)
       if (!sent.ok) throw new Error(sent.error)
       state.lastWake = { ok: true, sessionId: sent.sessionId, at: new Date().toTimeString().slice(0, 8) }
       log.info(`mc-companion: 已唤醒会话 ${sent.sessionId} —— ${line}`)
@@ -226,10 +314,44 @@ export function apply(ctx, rawConfig) {
       text: raw.text ?? '',
       at: raw.at,
     }
+    if (event.kind === 'inventory') {
+      state.inventory = { items: raw.items ?? [], chests: raw.chests ?? [], at: Date.now() }
+      return
+    }
+    if (event.kind === 'herinventory') {
+      state.herBag = { items: raw.items ?? [], at: Date.now() }
+      return
+    }
+    if (event.kind === 'recipes') {
+      state.recipes = { item: raw.item ?? '', recipes: raw.recipes ?? [], at: Date.now() }
+      return
+    }
+    if (event.kind === 'diag') {
+      state.sawMod = true
+      state.herAlive = raw.herAlive === true
+      state.saveState = String(raw.saveState ?? '')
+      state.modVersion = String(raw.version ?? '')
+      return
+    }
+    if (event.kind === 'snapshot') {
+      state.sawMod = true
+      state.herAlive = raw.herAlive !== false
+      return
+    }
     if (event.kind === 'ack') {
-      // mod 的回执：命令走到哪一步了
-      state.lastAck = { what: raw.what ?? '', detail: raw.detail ?? '', at: new Date().toTimeString().slice(0, 8) }
-      state.acks = [...(state.acks ?? []), state.lastAck].slice(-10)
+      // mod 的回执：命令走到哪一步了。
+      // 除了"最新一条"，还要留一个带序号的队列——她的自主会话和工具调用
+      // 会同时发命令，只看 lastAck 的话两条回执挤在 80ms 内就会漏掉一条
+      //（实测 make 就卡在"gather 没回话"）。
+      const one = { what: raw.what ?? '', detail: raw.detail ?? '', at: new Date().toTimeString().slice(0, 8) }
+      state.ackSeq = (state.ackSeq ?? 0) + 1
+      state.lastAck = one
+      state.ackLog = [...(state.ackLog ?? []), { ...one, seq: state.ackSeq }].slice(-200)
+      state.acks = [...(state.acks ?? []), one].slice(-10)
+      return
+    }
+    if (event.kind === 'plan') {
+      state.plan = { item: raw.item ?? '', tree: raw.tree ?? null, at: Date.now() }
       return
     }
     if (event.kind === 'snapshot') {
@@ -247,12 +369,21 @@ export function apply(ctx, rawConfig) {
       return
     }
     void refreshPause()
-    if (event.kind === 'arrived') {
-      // 任务做完 = 该决定下一步了。这是决策循环的节拍，不走随机闸门。
-      state.lastVerdict = { kind: 'arrived', wanted: true, reason: 'task-done' }
-      state.pending.push({ ...event, wanted: true, reason: 'task-done', at: Date.now() })
+    if (event.kind === 'arrived' || event.kind === 'stuck') {
+      // 任务做完 / 走不过去 = 该决定下一步了。这是决策循环的节拍，不走随机闸门。
+      const reason = event.kind === 'stuck' ? 'stuck' : 'task-done'
+      state.lastVerdict = { kind: event.kind, wanted: true, reason }
+      state.pending.push({ ...event, wanted: true, reason, at: Date.now() })
       if (state.pending.length > config.maxPending) state.pending.shift()
-      void wake(event, { reason: 'task-done' })
+      void wake(event, { reason })
+      return
+    }
+    if (event.kind === 'craft') {
+      // 玩家在合成页点了目标：这是元指令，必须叫醒我跑完整条链
+      state.lastVerdict = { kind: 'craft', wanted: true, reason: 'craft-request' }
+      state.pending.push({ ...event, wanted: true, reason: 'craft-request', at: Date.now() })
+      if (state.pending.length > config.maxPending) state.pending.shift()
+      void wake({ ...event, kind: 'craft' }, { reason: 'craft-request' })
       return
     }
     if (event.kind === 'panel') {
@@ -267,7 +398,16 @@ export function apply(ctx, rawConfig) {
       state.lastVerdict = { kind: 'panel', wanted: true, reason: 'panel' }
       void wake({ kind: 'panel', player: state.snapshot?.name ?? '' }, { reason: 'panel' })
       return
-    }    if (event.kind === 'chat' && isOrder({ text: event.text, names: [config.displayName, '同伴'] })) {
+    }    if (
+      event.kind === 'chat'
+      && isOrder({
+        text: event.text,
+        names: [config.displayName, '同伴'],
+        // 单机：你自己打的字就是指令，不用喊她名字
+        own: event.player !== '' && event.player === state.snapshot?.name,
+        singleplayer: state.snapshot?.multiplayer === false,
+      })
+    ) {
       // 指令不走随机闸门：你喊了就得听见
       state.lastVerdict = { kind: 'chat', wanted: true, reason: 'order' }
       state.pending.push({ ...event, wanted: true, reason: 'order', at: Date.now() })
@@ -330,7 +470,19 @@ export function apply(ctx, rawConfig) {
     bridge = createBridge({
       port: config.bridgePort,
       onEvent: acceptEvent,
-      onStatus: (s) => log.info(`mc-companion: 游戏管道 ${s}`),
+      onStatus: (s) => {
+        log.info(`mc-companion: 游戏管道 ${s}`)
+        // 连上就把名字同步给她：她可能是自己显形的，初识只叫"同伴"
+        if (s === 'connected' && bridge) {
+          bridge.send({ cmd: 'rename', name: config.displayName, type: config.bodyType })
+          bridge.send({
+            cmd: 'rules',
+            invulnerable: config.sheInvulnerable,
+            dropOnDeath: config.dropOnDeath,
+            revive: config.revive,
+          })
+        }
+      },
     })
     ctx.effect(() => () => bridge.stop(), 'mcCompanion.bridge')
   }
@@ -349,6 +501,33 @@ export function apply(ctx, rawConfig) {
 
   timer = setInterval(() => { void tick() }, 1000)
   ctx.effect(() => () => clearInterval(timer), 'mcCompanion.tail')
+
+  // ── 等她开口要的材料：给了就自动接着做
+  // 以前她问完就结束了，玩家把铁锭放她箱子里/丢给她也没人接着做。
+  // 这里每 6 秒看一眼玩家背包，凑齐了就唤醒一次，让她继续 make。
+  const requestTimer = setInterval(async () => {
+    const request = state.request
+    if (!request) return
+    if (Date.now() - request.askedAt > 600000) {      // 10 分钟还没给，忘掉
+      state.request = null
+      return
+    }
+    if (!bridge?.connected) return
+    state.inventory = null
+    if (!bridge.send({ cmd: 'inventory' })) return
+    const started = Date.now()
+    while (Date.now() - started < 1500 && !state.inventory) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    const inventory = state.inventory
+    if (!inventory) return
+    if (!needsSatisfied(request.needs, inventory)) return
+    state.request = null
+    const label = request.needs.map((n) => `${n.id}×${n.count}`).join('、')
+    log.info(`mc-companion: 材料到了（${label}），叫她继续做 ${request.item}`)
+    void wake({ kind: 'materials', item: request.item, detail: label }, { reason: 'materials' })
+  }, 6000)
+  ctx.effect(() => () => clearInterval(requestTimer), 'mcCompanion.request')
 
   // ── 路由：状态自查 + 设置面板
   if (ctx.webServer) {
@@ -411,11 +590,25 @@ export function apply(ctx, rawConfig) {
             try {
               const body = JSON.parse(await readBody(req))
               const before = config.displayName
+              const beforeType = config.bodyType
+              const beforeSkin = config.skinPath
               const next = normalizeSettings(body, config)
               Object.assign(config, next)
-              // 名字改了：实体头顶的字也要跟着换
-              if (config.displayName !== before && bridge?.connected) {
-                bridge.send({ cmd: 'rename', name: config.displayName })
+              // 名字或类型改了：实体头顶的字、身体本身都要跟着换
+              if ((config.displayName !== before || config.bodyType !== beforeType) && bridge?.connected) {
+                bridge.send({ cmd: 'rename', name: config.displayName, type: config.bodyType })
+              }
+              if (config.skinPath !== beforeSkin && bridge?.connected) {
+                bridge.send({ cmd: 'skin', path: config.skinPath ?? '' })
+              }
+              // 规则改了：立刻推给 mod
+              if (bridge?.connected) {
+                bridge.send({
+                  cmd: 'rules',
+                  invulnerable: config.sheInvulnerable,
+                  dropOnDeath: config.dropOnDeath,
+                  revive: config.revive,
+                })
               }
               const persisted = saveSettings(next)
               json(res, 200, {
@@ -462,17 +655,22 @@ export function apply(ctx, rawConfig) {
   const tool = {
     name: 'mc_companion',
     description:
-      '看 Minecraft 里发生了什么，或者让角色在游戏里说话。action=pending 取走最近的待处理事件（带 wanted 标记：该不该开口）；action=say 用 text 发一条游戏内消息；action=state 看 TPS/在线玩家；action=status 看插件配置与 RCON 连通性。',
+      '看 Minecraft 里发生了什么，或者让角色在游戏里做事。action=pending 取走最近的待处理事件（带 wanted 标记：该不该开口）；action=say 用 text 发一条游戏内消息；action=gather 让她自己找周围的树并砍（缺木头就用这个，不用问玩家）；action=craft 试着做一个东西（缺什么会直接说出来）；action=state 看 TPS/在线玩家；action=status 看插件配置与 RCON 连通性。',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['pending', 'say', 'state', 'status', 'identity', 'brief', 'remember', 'wake', 'export', 'import', 'world', 'body', 'order'] },
+        action: { type: 'string', enum: ['pending', 'say', 'state', 'status', 'identity', 'brief', 'remember', 'wake', 'export', 'import', 'world', 'body', 'order', 'mine', 'gather', 'equip', 'place', 'plan', 'make', 'setup', 'rescue', 'deliver', 'collect', 'attack', 'inventory', 'recipe', 'craft', 'herbag'] },
         text: { type: 'string', description: 'action=say 时要发到游戏里的文字' },
         limit: { type: 'number', description: 'action=pending 时最多取几条，默认 10' },
         note: { type: 'string', description: 'action=remember 时要写进日记的一句话（需开启 diaryWrite）' },
         path: { type: 'string', description: 'action=import 时要读的迁移文件路径，留空用默认位置' },
+        rel: { type: 'string', description: 'action=mine 的相对目标：under（她脚下）/ underPlayer（你脚下）/ crosshair（准星）' },
+        radius: { type: 'number', description: 'action=gather 时找的目标范围（格），默认 24' },
+        what: { type: 'string', enum: ['log', 'stone'], description: 'action=gather 时找什么：log 砍树（默认）/ stone 挖石头' },
         on: { type: 'boolean', description: 'action=body 时：true 生成身体，false 收回' },
-        kind: { type: 'string', description: 'action=order 时：goto（走到 x/y/z）或 halt（停下）' },
+        kind: { type: 'string', description: 'action=order 时：goto / halt / follow' },
+        all: { type: 'boolean', description: 'action=deliver 时：true 表示把包里所有东西都给你（默认），false 只交手上那件' },
+        item: { type: 'string', description: 'action=recipe 时要查的物品 id，如 minecraft:stone_pickaxe' },
         x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' },
       },
       required: ['action'],
@@ -519,21 +717,357 @@ export function apply(ctx, rawConfig) {
       }
 
       if (action === 'wake') {
-        // 自检：走一遍真实的唤醒路径，看能不能把会话叫醒
-        const sessionId = config.sessionId || state.sessionId || await newestSessionId()
-        if (sessionId === '') return { ok: false, error: '找不到会话' }
-        const ac = new AbortController()
-        return promptSession(ctx, sessionId, '🐟 自检：如果你看到这条，说明她能叫醒你。', ac.signal)
+        // 自检：走真实唤醒路径（含专用会话解析），返回这次投递到哪
+        await wake({ kind: 'panel', player: state.snapshot?.name ?? '' }, { reason: 'self-test' })
+        return { ok: state.lastWake?.ok === true, session: state.lastWake?.sessionId ?? '', error: state.lastWake?.error ?? '', ack: state.lastWake ?? null }
+      }
+      if (action === 'gather') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        const radius = Number(args?.radius ?? 24)
+        // what: log（砍树，默认）/ stone（挖石头）
+        const what = String(args?.what ?? 'log').trim() === 'stone' ? 'stone' : 'log'
+        state.lastAck = null
+        if (!bridge.send({ cmd: 'gather', radius, what })) return { ok: false, error: '发送失败' }
+        const started = Date.now()
+        let ack = null
+        while (Date.now() - started < 2500) {
+          const seen = state.lastAck
+          if (seen && String(seen.what ?? '').startsWith('gather')) {
+            ack = seen
+            break
+          }
+          await new Promise((resolve) => setTimeout(resolve, 80))
+        }
+        if (!ack) return { ok: false, result: 'no-reply', detail: '游戏没回话' }
+        return {
+          ok: ack.what === 'gather-found',
+          result: String(ack.what ?? ''),
+          detail: String(ack.detail ?? ''),
+          radius,
+          what,
+          note: ack.what === 'gather-found'
+            ? (what === 'stone' ? '找到了石头，她会走过去挖（手里得有镐，不然不掉东西）' : '找到了树，她会走过去砍；砍到的东西落进她的包')
+            : '',
+        }
+      }
+      if (action === 'make') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        const item = String(args?.item ?? '').trim()
+        if (item === '') return { ok: false, error: 'make 需要 item，例如 minecraft:stone_pickaxe' }
+        const rounds = Math.max(1, Math.min(20, Number(args?.rounds ?? 12)))
+
+        // 等某条 ack：从 from 之后**新进队列**的回执里找。
+        // 用队列而不是 lastAck —— 她的自主会话可能同时发命令，会互相覆盖。
+        const waitAck = async (match, ms, from = 0) => {
+          const started = Date.now()
+          while (Date.now() - started < ms) {
+            const hit = (state.ackLog ?? []).find((a) => a.seq > from && match(String(a.what ?? '')))
+            if (hit) return hit
+            await new Promise((resolve) => setTimeout(resolve, 60))
+          }
+          return null
+        }
+        const planOnce = async () => {
+          state.plan = null
+          if (!bridge.send({ cmd: 'plan', item })) throw new Error('发送 plan 失败')
+          const started = Date.now()
+          while (Date.now() - started < 3000) {
+            if (state.plan && state.plan.item === item) return flattenPlan(state.plan.tree)
+            await new Promise((resolve) => setTimeout(resolve, 80))
+          }
+          throw new Error('plan 没回话')
+        }
+        // 一个步骤真的落到游戏里：发命令 → 等它自己的回执
+        const execStep = async (step) => {
+          if (step.action === 'gather') {
+            const from = state.ackSeq ?? 0
+            bridge.send({ cmd: 'gather', what: step.args.what, radius: step.args.radius ?? 32 })
+            const found = await waitAck((w) => w.startsWith('gather'), 8000, from)
+            if (!found) return { ok: false, detail: 'gather 没回话' }
+            if (found.what !== 'gather-found') return { ok: false, detail: found.detail || found.what }
+            // 走过去 + 挖，可能要几十秒
+            const mined = await waitAck((w) => w === 'mined' || w === 'mine-failed' || w === 'mine-need-tool'
+              || w === 'mine-unreachable' || w === 'stuck', 90000, from)
+            if (!mined) return { ok: false, detail: '挖了 90 秒没结果' }
+            return { ok: mined.what === 'mined', detail: mined.detail || '' }
+          }
+          if (step.action === 'craft') {
+            const from = state.ackSeq ?? 0
+            bridge.send({ cmd: 'craft', item: step.args.item })
+            const ack = await waitAck((w) => w.startsWith('craft'), 15000, from)
+            if (!ack) return { ok: false, detail: 'craft 没回话' }
+            return { ok: ack.what === 'crafted', detail: ack.detail || '' }
+          }
+          if (step.action === 'smelt') {
+            // 烧炼：要熔炉、要燃料、要时间。没熔炉就自己做一个放下再烧一次。
+            const doSmelt = async () => {
+              const from = state.ackSeq ?? 0
+              bridge.send({ cmd: 'smelt', item: step.args.item, count: step.args.count ?? 1 })
+              const ack = await waitAck((w) => w.startsWith('smelt'), 8000, from)
+              return ack
+            }
+            let ack = await doSmelt()
+            if (!ack) return { ok: false, detail: 'smelt 没回话' }
+            if (ack.what === 'smelt-no-furnace') {
+              // 自己做熔炉：8 圆石（3×3，会自己放工作台）
+              const craftFrom = state.ackSeq ?? 0
+              bridge.send({ cmd: 'craft', item: 'minecraft:furnace' })
+              const crafted = await waitAck((w) => w.startsWith('craft'), 15000, craftFrom)
+              if (!crafted || crafted.what !== 'crafted') {
+                return { ok: false, detail: `熔炉也做不出来：${crafted?.detail ?? '没回话'}` }
+              }
+              const placeFrom = state.ackSeq ?? 0
+              bridge.send({ cmd: 'place', item: 'minecraft:furnace' })
+              const placed = await waitAck((w) => w.startsWith('place'), 5000, placeFrom)
+              if (!placed || placed.what !== 'placed') {
+                return { ok: false, detail: `熔炉放不下：${placed?.detail ?? '没回话'}` }
+              }
+              ack = await doSmelt()
+              if (!ack) return { ok: false, detail: '放了熔炉，但再烧一次没回话' }
+            }
+            if (ack.what === 'smelting') {
+              // 等它烧完（每件 10 秒，最多 60 秒 + 余量）
+              const done = await waitAck((w) => w === 'smelted' || w.startsWith('smelt-'), 75000, state.ackSeq ?? 0)
+              if (!done) return { ok: false, detail: '烧了 75 秒没出锭' }
+              return { ok: done.what === 'smelted', detail: done.detail || '' }
+            }
+            return { ok: ack.what === 'smelted', detail: ack.detail || ack.what }
+          }
+          if (step.action === 'equip') {
+            const from = state.ackSeq ?? 0
+            bridge.send({ cmd: 'equip', item: step.args.item })
+            const ack = await waitAck((w) => w.startsWith('equip'), 4000, from)
+            if (!ack) return { ok: false, detail: 'equip 没回话' }
+            return { ok: ack.what === 'equipped', detail: ack.detail || '' }
+          }
+          return { ok: false, detail: `不认识的步骤 ${step.action}` }
+        }
+
+        const result = await runMake({ plan: planOnce, exec: execStep, maxRounds: rounds })
+        // 缺她搞不到的材料：开口问，并记下"在等什么"。
+        // 以前这里是"停住把问题交回模型"，模型说完就结束了，材料到了也没人接着做。
+        if (!result.done && (result.asks ?? []).length > 0) {
+          const needs = parseNeeds(result.asks)
+          if (needs.length > 0) {
+            state.request = { item, needs, askedAt: Date.now(), did: result.did }
+            if (bridge?.connected) bridge.say(buildQuestion(needs, item), config.displayName)
+            return {
+              ok: false,
+              waiting: true,
+              item,
+              need: needs.map((n) => `${n.id}×${n.count}`),
+              did: result.did,
+              error: '',
+              note: '已经在游戏里用问句问玩家了；他给了材料会自动接着做',
+            }
+          }
+        }
+        return {
+          ok: result.done,
+          item,
+          done: result.done,
+          rounds: result.rounds,
+          did: result.did,
+          asks: result.asks,
+          error: result.done ? '' : result.lastError,
+        }
+      }
+      if (action === 'setup') {
+        // 让玩家的 AI 自己查状态、自己教人装
+        const info = buildSetup({
+          root: pluginRoot,
+          bridgeConnected: bridge?.connected === true,
+          herAlive: state.herAlive === true,
+          modReported: state.sawMod === true,
+          saveStateLoaded: state.saveState !== '',
+        })
+        return { ok: true, ...info }
+      }
+      if (action === 'plan') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        const item = String(args?.item ?? '').trim()
+        if (item === '') return { ok: false, error: 'plan 需要 item，例如 minecraft:stone_pickaxe' }
+        state.plan = null
+        if (!bridge.send({ cmd: 'plan', item })) return { ok: false, error: '发送失败' }
+        const started = Date.now()
+        let data = null
+        while (Date.now() - started < 3000) {
+          if (state.plan && state.plan.item === item) { data = state.plan; break }
+          await new Promise((resolve) => setTimeout(resolve, 80))
+        }
+        if (!data) return { ok: false, item, error: '游戏没回话（mod 是旧版本？）' }
+        const { steps, asks } = flattenPlan(data.tree)
+        return {
+          ok: true,
+          item,
+          steps: steps.map((step) => `${step.action} ${Object.entries(step.args).map(([k, v]) => `${k}=${v}`).join(' ')}`.trim()),
+          asks,
+          guide: describePlan(steps, asks),
+        }
+      }
+      if (action === 'rescue') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        state.lastAck = null
+        if (!bridge.send({ cmd: 'rescue' })) return { ok: false, error: '发送失败' }
+        const started = Date.now()
+        while (Date.now() - started < 2000) {
+          const seen = state.lastAck
+          if (seen && /^rescue/.test(String(seen.what ?? ''))) {
+            return { ok: true, result: String(seen.what), detail: String(seen.detail ?? '') }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 80))
+        }
+        return { ok: false, result: 'no-reply', detail: '游戏没回话' }
+      }
+      if (action === 'place') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        const item = String(args?.item ?? '').trim()
+        if (item === '') return { ok: false, error: 'place 需要 item（她包里的方块 id）' }
+        state.lastAck = null
+        if (!bridge.send({ cmd: 'place', item })) return { ok: false, error: '发送失败' }
+        const started = Date.now()
+        let ack = null
+        while (Date.now() - started < 2500) {
+          const seen = state.lastAck
+          if (seen && /^(placed|place-)/.test(String(seen.what ?? ''))) {
+            ack = seen
+            break
+          }
+          await new Promise((resolve) => setTimeout(resolve, 80))
+        }
+        if (!ack) return { ok: false, result: 'no-reply', detail: '游戏没回话' }
+        return { ok: ack.what === 'placed', result: String(ack.what ?? ''), detail: String(ack.detail ?? '') }
+      }
+      if (action === 'equip') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        const item = String(args?.item ?? '').trim()
+        if (item === '') return { ok: false, error: 'equip 需要 item（包里的物品 id），卸下用 item=none' }
+        state.lastAck = null
+        if (!bridge.send({ cmd: 'equip', item })) return { ok: false, error: '发送失败' }
+        const started = Date.now()
+        let ack = null
+        while (Date.now() - started < 2500) {
+          const seen = state.lastAck
+          if (seen && String(seen.what ?? '').startsWith('equip')) {
+            ack = seen
+            break
+          }
+          await new Promise((resolve) => setTimeout(resolve, 80))
+        }
+        if (!ack) return { ok: false, result: 'no-reply', detail: '游戏没回话' }
+        return { ok: ack.what === 'equipped', result: String(ack.what ?? ''), detail: String(ack.detail ?? '') }
+      }
+      if (action === 'deliver') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        const all = args?.all !== false
+        state.lastAck = null
+        if (!bridge.send({ cmd: 'deliver', all })) return { ok: false, error: '发送失败' }
+        // 要等她走过去，最多等 15 秒
+        const started = Date.now()
+        let ack = null
+        while (Date.now() - started < 15000) {
+          const seen = state.lastAck
+          if (seen && /^deliver(ed|-stuck|-no-companion)?$/.test(String(seen.what ?? ''))) {
+            ack = seen
+            break
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+        if (!ack) return { ok: false, result: 'no-reply', detail: '15 秒内没送到（她可能路被挡了）' }
+        return {
+          ok: ack.what === 'delivered',
+          result: String(ack.what ?? ''),
+          detail: String(ack.detail ?? ''),
+        }
+      }
+      if (action === 'craft') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        const item = String(args?.item ?? '').trim()
+        if (item === '') return { ok: false, error: 'craft 需要 item，例如 minecraft:stick' }
+        // 等回执再返回：不然后面那个模型以为"发出去了=做好了"，
+        // 玩家看到的就是"合成任务没被执行"
+        state.lastAck = null
+        if (!bridge.send({ cmd: 'craft', item })) return { ok: false, error: '发送失败' }
+        const started = Date.now()
+        let ack = null
+        while (Date.now() - started < 2500) {
+          const seen = state.lastAck
+          if (seen && String(seen.what ?? '').startsWith('craft')) {
+            ack = seen
+            break
+          }
+          await new Promise((resolve) => setTimeout(resolve, 80))
+        }
+        if (!ack) return { ok: false, item, result: 'no-reply', detail: '游戏没回话（mod 是不是旧版本？）' }
+        return {
+          ok: ack.what === 'crafted',
+          item,
+          result: String(ack.what ?? ''),
+          detail: String(ack.detail ?? ''),
+        }
+      }
+
+      if (action === 'inventory' || action === 'recipe') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        const waitFor = async (read, ms = 1500) => {
+          const started = Date.now()
+          while (Date.now() - started < ms) {
+            const value = read()
+            if (value) return value
+            await new Promise((resolve) => setTimeout(resolve, 80))
+          }
+          return null
+        }
+        if (action === 'inventory') {
+          state.inventory = null
+          if (!bridge.send({ cmd: 'inventory' })) return { ok: false, error: '发送失败' }
+          const data = await waitFor(() => state.inventory)
+          if (!data) return { ok: false, error: '游戏没回话（mod 是不是旧版本？）' }
+          return { ok: true, items: data.items, chests: data.chests, chestCount: data.chests.length }
+        }
+        const item = String(args?.item ?? '').trim()
+        if (item === '') return { ok: false, error: 'recipe 需要 item，例如 minecraft:stone_pickaxe' }
+        state.recipes = null
+        if (!bridge.send({ cmd: 'recipe', item })) return { ok: false, error: '发送失败' }
+        const data = await waitFor(() => state.recipes)
+        if (!data) return { ok: false, error: '游戏没回话（mod 是不是旧版本？）' }
+        return { ok: true, item: data.item, recipes: data.recipes }
+      }
+      if (action === 'collect' || action === 'attack') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        const sent = bridge.send({ cmd: action })
+        return { ok: sent, action, note: action === 'collect' ? '把她 8 格内的掉落物收进你背包' : '打她 4 格内的敌对生物' }
+      }
+      if (action === 'herbag') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        state.herBag = null
+        if (!bridge.send({ cmd: 'herbag' })) return { ok: false, error: '发送失败' }
+        const started = Date.now()
+        while (Date.now() - started < 1500 && !state.herBag) {
+          await new Promise((r) => setTimeout(r, 80))
+        }
+        return state.herBag ? { ok: true, items: state.herBag.items } : { ok: false, error: '她没回话' }
+      }
+
+      if (action === 'mine') {
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
+        const x = Number(args?.x), y = Number(args?.y), z = Number(args?.z)
+        if (![x, y, z].every((n) => Number.isInteger(n))) return { ok: false, error: 'mine 需要整数 x/y/z' }
+        // 距离由 mod 判断：远了它会自己走过去再挖
+        const rel = String(args?.rel ?? '').trim()
+        if (rel !== '') return { ok: bridge.send({ cmd: 'mine', rel }), mine: { rel } }
+        return { ok: bridge.send({ cmd: 'mine', x, y, z }), mine: { x, y, z } }
       }
       if (action === 'order') {
-        if (!bridge?.connected) return { ok: false, error: '管道没连上' }
+        if (!bridge?.connected) return { ok: false, error: '管道没连上（mod 没装或游戏没进存档）。调 action=setup 拿安装步骤，用中文一步步教他。' }
         const kind = String(args?.kind ?? '')
         if (kind === 'halt') {
           return { ok: bridge.send({ cmd: 'halt' }), order: 'halt' }
         }
         if (kind === 'follow') {
           const on = args?.on !== false
-          return { ok: bridge.send({ cmd: 'follow', on }), order: 'follow', follow: on }
+          const distance = followDistanceFor(config.preference)
+          return { ok: bridge.send({ cmd: 'follow', on, distance }), order: 'follow', follow: on, distance }
         }
         if (kind !== 'goto') return { ok: false, error: 'kind 只能是 goto / halt / follow' }
         const x = Number(args?.x), y = Number(args?.y), z = Number(args?.z)
@@ -677,6 +1211,8 @@ export function apply(ctx, rawConfig) {
         lastWake: JSON.stringify(state.lastWake ?? null),
         extKeys: state.extKeys ?? '',
         controllerKeys: Object.keys(ctx.sessionController ?? {}).join(','),
+        stateKeys: Object.keys(ctx.sessionController?.stateController ?? {}).join(','),
+        agentKeys: Object.keys(ctx.sessionController?.agents ?? {}).join(','),
         rconOk: probe.ok === true,
         rconError: typeof probe.error === 'string' ? probe.error : '',
       }

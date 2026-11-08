@@ -1,7 +1,7 @@
 {
   "name": "dsh-mc-companion",
-  "version": "0.1.0",
-  "description": "让你的 AI 陪你玩 Minecraft：读服务器日志看你在干什么，按「对话活跃度」决定什么时候开口。",
+  "version": "0.1.1-beta.1",
+  "description": "让你的 AI 以「一个女人」的身份住进你的 Minecraft：自己的背包、自己的合成台、自己下矿攒材料做工具，累了自己回家。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -17,10 +17,22 @@
     "lib",
     "ui",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "AGENTS.md",
+    "INSTALL.md",
+    "UPLOAD.md",
+    "mod/build/libs/mc-companion-*.jar"
   ],
-  "keywords": ["dsh", "dsh-plugin", "minecraft", "companion", "rcon"],
-  "author": "xizhilang_2012",
+  "keywords": ["dsh", "dsh-plugin", "minecraft", "companion", "fabric", "1.20.1", "ai-agent"],
+    "author": "xizhilang_2012",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xizhilang2012/dsh-mc-companion.git"
+  },
+  "homepage": "https://github.com/xizhilang2012/dsh-mc-companion#readme",
+  "bugs": {
+    "url": "https://github.com/xizhilang2012/dsh-mc-companion/issues"
+  },
   "scripts": { "test": "node --test tests/*.test.mjs" },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },

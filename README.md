@@ -1,5 +1,8 @@
 # mc-companion · 让你养的 AI 陪你玩 Minecraft
 
+> **0.1.1-beta.1** · 测试版
+> **装之前先读 [INSTALL.md](INSTALL.md)：需要两样东西（DSH 插件 + Minecraft mod），jar 已经打包在插件里。**
+
 会话里那个 AI 能看见你在游戏里干了什么，并在合适的时候说一句。
 
 不是 mod 内置的 NPC——**AI 在 DSH 里，mod 只是一根管子**。所以陪你玩的是你平时聊天的那一个，不是另一个。

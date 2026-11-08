@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "mc-companion",
+  "version": "0.1.1-beta.1",
+  "name": "MC Companion",
+  "description": "给 DSH 的 AI 一个能自己走、自己挖、自己攒材料的身体（Minecraft 1.20.1 Fabric）。",
+  "authors": ["xizhilang_2012"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.xizhilang.mccompanion.McCompanionMod"],
+    "client": ["com.xizhilang.mccompanion.McCompanionClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "fabric-api": "*",
+    "minecraft": "1.20.1",
+    "java": ">=17"
+  }
+}

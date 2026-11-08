@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 xizhilang2012
+Copyright (c) 2026 xizhilang_2012
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+第三方与素材说明：
+
+* 随包分发的 Minecraft mod（mc-companion-*.jar）同样是 MIT。
+* 她的皮肤（textures/entity/whale_girl.png）为本项目自绘，结构参考了
+  The Skindex 上的一张社区皮肤（仅参考 8×8 脸的排布方式，像素与配色均为自绘）。
+* 不含任何 Mojang 的原始素材。Minecraft 是 Mojang Studios 的商标，
+  本项目与 Mojang 无关。

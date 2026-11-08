@@ -187,6 +187,12 @@ window.__ModuleLoader__.load({
                 personaFile: state.personaFile || '',
                 diaryFile: state.diaryFile || '',
                 level: state.level,
+                preference: state.preference,
+                preferenceCustom: state.preferenceCustom || '',
+                talkLevel: state.talkLevel || 'normal',
+                revive: state.revive === true,
+                sheInvulnerable: state.sheInvulnerable !== false,
+                dropOnDeath: state.dropOnDeath === true,
                 autoGoal: state.autoGoal === true,
                 goalIntervalSeconds: state.goalIntervalSeconds,
               }),
@@ -247,6 +253,135 @@ window.__ModuleLoader__.load({
               ),
             ),
             h('div', { style: S.hint }, '选一档会把下面的参数一起改掉，之后还能单独微调。'),
+          ),
+          h(
+            'div',
+            { style: S.row },
+            h('div', { style: S.label }, h('span', { style: S.name }, '她的性子')),
+            h(
+              'div',
+              { style: S.modes },
+              [
+                ['company', '黏人', '喜欢待在你附近，看你做事，偶尔说一句。'],
+                ['build', '喜欢建筑', '会主动攒材料，想找地方搭点东西。'],
+                ['gather', '喜欢采集', '爱挖矿、爱捡东西，看到材料就想收。'],
+                ['explore', '爱探险', '喜欢往没去过的地方走。'],
+                ['guard', '守着', '待在你附近，把靠过来的敌人打掉。'],
+                ['custom', '自定义', '你自己写一句话决定她想干什么。'],
+              ].map(([id, title, detail]) =>
+                h(
+                  'label',
+                  {
+                    key: id,
+                    style: state.preference === id ? { ...S.mode, ...S.modeOn } : S.mode,
+                    onClick: () => patch('preference', id),
+                  },
+                  h('input', {
+                    type: 'radio',
+                    name: 'mc-companion-pref',
+                    checked: state.preference === id,
+                    onChange: () => patch('preference', id),
+                  }),
+                  h(
+                    'span',
+                    null,
+                    h('div', { style: S.modeT }, title),
+                    h('div', { style: S.modeD }, detail),
+                  ),
+                ),
+              ),
+            ),
+            h('div', { style: S.hint }, '她闲下来自己找事做时，会照这个性子来。'),
+            // 选了「自定义」才出现的一句话：直接进提示词
+            state.preference === 'custom'
+              ? h(
+                'div',
+                { style: { marginTop: 8 } },
+                h('input', {
+                  type: 'text',
+                  value: state.preferenceCustom ?? '',
+                  placeholder: '比如：喜欢在夜里钓鱼，白天修路，不爱下矿',
+                  maxLength: 300,
+                  style: { width: '100%', padding: '6px 8px', boxSizing: 'border-box' },
+                  onInput: (event) => setState((prev) => ({ ...prev, preferenceCustom: event.target.value })),
+                  onChange: (event) => patch('preferenceCustom', event.target.value),
+                }),
+                h('div', { style: S.hint }, '这句话会原样进她的提示词；留空就是"按自己的判断来"。'),
+              )
+              : null,
+          ),
+          // ── 话量：控制"她多爱说话"（改提示词，不是改数字）
+          h(
+            'div',
+            { style: S.row },
+            h('div', { style: S.label }, h('span', { style: S.name }, '话量')),
+            h(
+              'div',
+              { style: S.modes },
+              [
+                ['quiet', '话少', '能不说就不说，只在被问到或做完事时开口'],
+                ['normal', '正常', '被问到要回，做完说一句结果'],
+                ['chatty', '话多', '每件事都能接一句，闲着也说说自己在干什么'],
+              ].map(([id, title, detail]) =>
+                h(
+                  'label',
+                  {
+                    key: id,
+                    style: state.talkLevel === id ? { ...S.mode, ...S.modeOn } : S.mode,
+                    onClick: () => patch('talkLevel', id),
+                  },
+                  h('input', {
+                    type: 'radio',
+                    name: 'mc-companion-talk',
+                    checked: (state.talkLevel || 'normal') === id,
+                    onChange: () => patch('talkLevel', id),
+                  }),
+                  h(
+                    'span',
+                    null,
+                    h('div', { style: S.modeT }, title),
+                    h('div', { style: S.modeD }, detail),
+                  ),
+                ),
+              ),
+            ),
+            h('div', { style: S.hint }, '这一项改的是提示词里"说不说、说多长"，比调预算更直接。'),
+          ),
+          // ── 游戏内的规则（折叠）
+          h(
+            'div',
+            { style: { ...S.row, borderTop: '1px solid rgba(127,127,127,.2)', paddingTop: 14 } },
+            h(
+              'div',
+              {
+                style: { ...S.label, cursor: 'pointer' },
+                onClick: () => setState((prev) => ({ ...prev, showRules: !prev.showRules })),
+              },
+              h('span', { style: S.name }, `${state.showRules ? '▾' : '▸'} 游戏内的规则`),
+              h('span', { style: S.muted }, '每个存档只生成一个她'),
+            ),
+            state.showRules
+              ? h(
+                  'div',
+                  { style: { ...S.modes, marginTop: 8 } },
+                  [
+                    ['revive', '死了会复活', '她倒下 3 秒后自己回来；关掉就再也不出现。'],
+                    ['sheInvulnerable', '不会被打死', '关掉之后她会受伤、会死——配合"复活"用。'],
+                    ['dropOnDeath', '死亡时掉落背包', '关掉的话她的东西留在包里，复活后还在。'],
+                  ].map(([key, title, detail]) =>
+                    h(
+                      'label',
+                      {
+                        key,
+                        style: state[key] ? { ...S.mode, ...S.modeOn } : S.mode,
+                        onClick: () => patch(key, !state[key]),
+                      },
+                      h('input', { type: 'checkbox', checked: state[key] === true, onChange: () => patch(key, !state[key]) }),
+                      h('span', null, h('div', { style: S.modeT }, title), h('div', { style: S.modeD }, detail)),
+                    ),
+                  ),
+                )
+              : null,
           ),
           h(Slider, {
             title: '对话活跃度',
@@ -323,6 +458,37 @@ window.__ModuleLoader__.load({
               'div',
               { style: S.hint },
               `当前读取：${(state.sources && state.sources.diary) || '未找到日记'}`,
+            ),
+          ),
+          // ── 自定义皮肤：一张 64×64 的 png，填路径立刻换（不用重启游戏）
+          h(
+            'div',
+            { style: S.row },
+            h('div', { style: S.label }, h('span', { style: S.name }, '她的皮肤')),
+            h('input', {
+              type: 'text',
+              value: state.skinPath || '',
+              placeholder: '留空 = 自带鲸鱼娘；或填一张 64×64 png 的完整路径',
+              style: S.input,
+              onChange: (e) => patch('skinPath', e.target.value),
+            }),
+            h(
+              'div',
+              { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 } },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  onClick: () => patch('skinPath', ''),
+                  style: { padding: '4px 10px', cursor: 'pointer' },
+                },
+                '用自带的',
+              ),
+              h(
+                'span',
+                { style: S.hint },
+                '必须是 64×64 的 png；改完她立刻换装，不用重启游戏。',
+              ),
             ),
           ),
           h(

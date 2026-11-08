@@ -1,0 +1,26 @@
+# 构建产物 / 中间文件
+mod/build/
+mod/.gradle/
+mod/.gradle-home/
+mod/run/
+mod-1.21/build/
+mod-1.21/.gradle/
+dist/
+publish/
+
+# 开发时抓下来的参考素材（有版权风险，不进仓库、不进包）
+cache/
+*.tgz
+
+# 皮肤预览用的中间图（源文件和 make-*.py 进仓库，这些不进）
+mod/skin-front.png
+mod/skin-compare.png
+mod/skin-showcase.png
+mod/face-zoom.png
+mod/face-compare.png
+
+# 杂项
+node_modules/
+*.log
+.DS_Store
+Thumbs.db

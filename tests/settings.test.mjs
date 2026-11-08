@@ -25,7 +25,7 @@ test('名字太长截断，自定义的保留', () => {
 
 test('只存认识的键', () => {
   const stored = toStored({ chattiness: 40, foo: 'bar', mode: 'quiet' })
-  assert.deepEqual(Object.keys(stored).sort(), ['autoGoal', 'bodyType', 'chattiness', 'cooldownMs', 'diaryFile', 'displayName', 'goalIntervalSeconds', 'hideWake', 'level', 'mode', 'personaFile', 'respectPause', 'wakeBudgetPerHour'])
+  assert.deepEqual(Object.keys(stored).sort(), ['autoGoal', 'bodyType', 'chattiness', 'cooldownMs', 'diaryFile', 'displayName', 'goalIntervalSeconds', 'hideWake', 'level', 'mode', 'personaFile', 'preference', 'preferenceCustom', 'talkLevel', 'respectPause', 'dropOnDeath', 'revive', 'sheInvulnerable', 'skinPath', 'wakeBudgetPerHour'].sort())
   assert.equal(stored.foo, undefined)
 })
 

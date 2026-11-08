@@ -26,8 +26,24 @@ test('剥掉游戏前缀再判断', () => {
   assert.equal(isOrder({ text: '<wangzhixi> 大肥鱼过来', names }), true)
 })
 
+test('单机里你自己打的字就是指令，不用喊名字', () => {
+  assert.equal(isOrder({ text: '过来', names, own: true, singleplayer: true }), true)
+  assert.equal(isOrder({ text: '帮我挖点石头', names, own: true, singleplayer: true }), true)
+})
+
+test('多人里不能这样算——别人的闲聊会把她叫醒', () => {
+  assert.equal(isOrder({ text: '过来', names, own: true, singleplayer: false }), false)
+  assert.equal(isOrder({ text: '过来', names, own: false, singleplayer: true }), false)
+})
+
+test('不知道是不是单机时，退回喊名字的规矩', () => {
+  assert.equal(isOrder({ text: '过来', names }), false)
+  assert.equal(isOrder({ text: '大肥鱼过来', names }), true)
+})
+
 test('空文本、没有名字配置时不炸', () => {
   assert.equal(isOrder({}), false)
   assert.equal(isOrder({ text: '大肥鱼', names: [] }), false)
-  assert.equal(isOrder({ text: '   ', names }), false)
+  assert.equal(isOrder({ text: '   ' }), false)
+  assert.equal(isOrder({ text: '   ', names, own: true, singleplayer: true }), false)
 })

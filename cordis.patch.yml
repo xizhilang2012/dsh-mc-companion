@@ -33,6 +33,8 @@
         wake: true
         # 她在游戏里显示的名字（不是你的 ID）
         displayName: '大肥鱼'
+        # 专用会话需要新会话自带模型选择；没有就落回当前会话
+        sessionMode: dedicated
         # 她闲下来时自己提目标（会花钱，关掉就只在你叫她时才动）
         autoGoal: true
         # 两次提目标至少隔多少秒

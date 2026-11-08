@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { parseIdentity, parseDiary, appendToWantToSay, splitSections } from '../lib/identity.mjs'
+import { parseIdentity, parseDiary, appendToWantToSay, splitSections, personaPrompt } from '../lib/identity.mjs'
 
 const CONFIG = {
   persona: { name: '大肥鱼', ownerTitle: '老大', selfClaim: '我' },
@@ -20,6 +20,23 @@ test('读身份：配置缺字段时给默认值', () => {
   assert.equal(id.name, '大肥鱼')
   assert.equal(id.ownerTitle, '老大')
   assert.equal(id.ownerName, '')
+  assert.equal(id.personality, '')
+})
+
+test('自由文本人设：personality 会被读出来并截断', () => {
+  const id = parseIdentity({ persona: { name: '鲸喜', personality: '喜欢修路，不喜欢下矿' } })
+  assert.equal(id.name, '鲸喜')
+  assert.equal(id.personality, '喜欢修路，不喜欢下矿')
+  const long = parseIdentity({ persona: { personality: 'x'.repeat(5000) } })
+  assert.equal(long.personality.length, 1200)
+})
+
+test('人设提示：有名字和性格时两段都出现，空的就返回空串', () => {
+  const text = personaPrompt({ name: '鲸喜', ownerTitle: '老大', personality: '喜欢修路' })
+  assert.ok(text.includes('鲸喜'))
+  assert.ok(text.includes('喜欢修路'))
+  assert.ok(text.includes('别每句都复述'))
+  assert.equal(personaPrompt({}), '')
 })
 
 test('按小节切分', () => {
